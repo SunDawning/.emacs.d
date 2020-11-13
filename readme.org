@@ -1,0 +1,86 @@
+在Emacs里求值后，使用＂earned:try-user-init-file＂命令，选择＂sundawning＂来试用本配置文件：
+
+#+BEGIN_SRC emacs-lisp
+(defun earned::try-user-init-file (select collection)
+  (when (and (executable-find "emacs") (display-graphic-p))
+    (let ((tmp temporary-file-directory)
+          (start-process-command ; start-process
+           (lambda (name command &optional sentinel)
+             (unless (functionp (function cl-find-if-not)) (require 'cl-seq))
+             (when (and (functionp (function cl-find-if-not)) (functionp (function make-process))
+                        (not (cl-find-if (lambda (item) (cl-find command item :test (function equal))) (mapcar (function process-command) (process-list)))))
+               (make-process :name name :command (cons shell-file-name (list shell-command-switch command)) :sentinel sentinel)))))
+      (when (and (file-exists-p tmp)
+                 select (symbolp select) collection (listp collection) (listp (car collection)))
+        (let* ((from (alist-get select collection))
+               (emacs-d (concat (symbol-name select) ".emacs.d"))
+               (to (file-name-as-directory (expand-file-name emacs-d tmp)))
+               (init (expand-file-name "init.el" to)))
+          ;; download or copy init.el
+          (if (let ((cl-x (url-generic-parse-url from))) (and (url-type cl-x) (url-host cl-x)))
+              (when (and (not (file-exists-p init)) (executable-find "git") (not (file-exists-p to)))
+                (message "Cloning to %s" to)
+                (funcall
+                 start-process-command (concat "background-clone-" emacs-d)
+                 (format "%S clone --depth=1 %s %s"  (executable-find "git") from to)
+                 (eval
+                  `(lambda (&rest rest)
+                     ;; Spacemacs needs downloading melpa repository.
+                     (when (eq (quote ,select) 'spacemacs)
+                       (let ((melpa (expand-file-name ".cache/quelpa/melpa" ,to))
+                             (start-process-command (function ,start-process-command)))
+                         (when (and (not (file-exists-p melpa)) (functionp start-process-command)
+                                    (executable-find "git"))
+                           (funcall start-process-command "background-clone-melpa" (concat (executable-find "git") " clone --depth=1 https://github.com/melpa/melpa.git " melpa)))))
+                     ;; Start Emacs or notify
+                     (if (functionp (function earned::try-user-init-file))
+                         (earned::try-user-init-file (quote ,select) (quote ,collection))
+                       (message ,(format "Cloned to %s" to)))))))
+            (unless (file-exists-p to) (make-directory to))
+            (copy-file (expand-file-name "init.el" from) init t))
+          (when (file-exists-p init)
+            ;; copy local .emacs.d/elpa directory
+            (let ((elpa (file-name-as-directory (expand-file-name "elpa" user-emacs-directory))))
+              (when (and (not (file-exists-p (expand-file-name "elpa" to))) (file-exists-p elpa))
+                (copy-directory elpa to t t)))
+            ;; exwm
+            (when (functionp (function earned::exwm)) (earned::exwm))
+            ;; emacs -Q
+            (funcall
+             start-process-command (concat "background-" emacs-d)
+             (format
+              "%S -Q -D --load %S" (executable-find "emacs")
+              (let ((temporary-file (expand-file-name (concat "try-" emacs-d) temporary-file-directory)))
+                (when (file-exists-p temporary-file) (delete-file temporary-file))
+                (with-temp-file temporary-file
+                  (pp
+                   `(progn
+                      (setf user-emacs-directory ,to user-init-file ,init default-directory ,tmp
+                            server-name ,emacs-d)
+                      (unless (member 'cp65001 coding-system-list)
+                        (define-coding-system-alias 'cp65001 'utf-8))
+                      (load user-init-file)
+                      (unless (eq system-type 'windows-nt)
+                        (unless (functionp (function server-running-p)) (require (quote server)))
+                        (when (and (functionp (function server-running-p)) (not (server-running-p))) (server-start)))
+                      (run-hook-with-args 'after-init-hook))
+                   (current-buffer)))
+                temporary-file)))))))))
+
+(defun earned:try-user-init-file ()
+  "从零开始试用`user-init-file'，用于学习与调试。"
+  (interactive)
+  (let ((collection
+         `((purcell                   . "https://github.com/purcell/emacs.d.git")
+           (spacemacs                 . "https://gitee.com/mirrors/spacemacs.git")
+           (centaur-emacs             . "https://github.com/seagle0128/.emacs.d.git")
+           (seagle0128                . "https://github.com/seagle0128/.emacs.d.git")
+           (sundawning                . "https://github.com/SunDawning/.emacs.d.git")
+           (,(intern user-login-name) . ,user-emacs-directory))))
+    (when (functionp (function earned::try-user-init-file))
+      (earned::try-user-init-file
+       (intern (completing-read "emacs.d: "
+                                (mapcar (function car) collection)
+                                nil t))
+       collection))))
+#+END_SRC
